@@ -1,7 +1,56 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # Exit on any error
-set -e
+set -euo pipefail
+umask 022
+
+readonly UPSTREAM_KERNEL_COMMIT="33d88af6404817e4df2343582bf6c1dd8ee10b89"
+readonly RESUKISU_REPO="https://github.com/ReSukiSU/ReSukiSU.git"
+readonly RESUKISU_COMMIT="94dd3c93c2053a84fd752df6eb85db99b7d70ab8"
+readonly BASEBAND_GUARD_REPO="https://github.com/vc-teahouse/Baseband-guard.git"
+readonly BASEBAND_GUARD_COMMIT="a54e0dc6cf0aff4dd87fec49644a02d2eb612905"
+readonly ANYKERNEL_REPO="https://github.com/AstideLabs/AnyKernel3.git"
+readonly ANYKERNEL_COMMIT="23c026f3a2801a1e01e227b175f8ab26cccf14dd"
+
+clone_exact_commit() {
+    local repository="$1"
+    local commit="$2"
+    local destination="$3"
+
+    if [ -e "$destination" ]; then
+        echo "[!] Refusing existing dependency path: $destination"
+        exit 1
+    fi
+
+    git init -q "$destination"
+    git -C "$destination" remote add origin "$repository"
+    git -C "$destination" fetch -q --depth=1 origin "$commit"
+    git -C "$destination" checkout -q --detach FETCH_HEAD
+
+    local actual_commit
+    actual_commit="$(git -C "$destination" rev-parse HEAD)"
+    if [ "$actual_commit" != "$commit" ]; then
+        echo "[!] Dependency commit mismatch for $destination"
+        exit 1
+    fi
+}
+
+setup_resukisu() {
+    echo "[*] Installing pinned ReSukiSU ${RESUKISU_COMMIT}..."
+    clone_exact_commit "$RESUKISU_REPO" "$RESUKISU_COMMIT" KernelSU
+
+    ln -s "../KernelSU/kernel" drivers/kernelsu
+    grep -q 'obj-$(CONFIG_KSU) += kernelsu/' drivers/Makefile \
+        || printf '\nobj-$(CONFIG_KSU) += kernelsu/\n' >> drivers/Makefile
+    grep -q 'source "drivers/kernelsu/Kconfig"' drivers/Kconfig \
+        || sed -i '/^endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
+}
+
+setup_baseband_guard() {
+    echo "[*] Installing pinned Baseband-guard ${BASEBAND_GUARD_COMMIT}..."
+    clone_exact_commit "$BASEBAND_GUARD_REPO" "$BASEBAND_GUARD_COMMIT" Baseband-guard
+    sh Baseband-guard/setup.sh "$BASEBAND_GUARD_COMMIT"
+}
 
 # ==========================================
 # Argument Parsing
@@ -43,11 +92,19 @@ done
 # Configuration & Environment
 # ==========================================
 KERNEL_DIR="$(pwd)"
-TOOLCHAIN_BIN="$HOME/zyc-clang/bin"
+TOOLCHAIN_BIN="${TOOLCHAIN_BIN:-$HOME/zyc-clang/bin}"
 
 export PATH="${TOOLCHAIN_BIN}:${PATH}"
 export ARCH="arm64"
 export SUBARCH="arm64"
+export LC_ALL=C
+export TZ=UTC
+export SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
+export KCONFIG_NOTIMESTAMP=1
+export KBUILD_BUILD_TIMESTAMP="$(date -u -d "@${SOURCE_DATE_EPOCH}" '+%a %b %d %H:%M:%S UTC %Y')"
+export KBUILD_BUILD_USER="astide-repro"
+export KBUILD_BUILD_HOST="github-actions"
+export KBUILD_BUILD_VERSION=1
 
 # ccache Setup
 export CCACHE_DIR="$HOME/.cache/ccache_mikernel"
@@ -75,8 +132,7 @@ if [ "$ENABLE_KSU" -eq 1 ]; then
     echo "==========================================="
     echo " [*] Initializing KernelSU (ReSukiSU) Setup"
     echo "==========================================="
-    echo "[*] Downloading and running ReSukiSU remote setup script..."
-    curl -LSs "https://raw.githubusercontent.com/ReSukiSU/ReSukiSU/main/kernel/setup.sh" | bash
+    setup_resukisu
     echo "[+] KernelSU setup finished."
 fi
 
@@ -86,11 +142,11 @@ fi
 echo "==========================================="
 echo " [*] Initializing Baseband-guard Setup"
 echo "==========================================="
-echo "[*] Downloading and running Baseband-guard remote setup script..."
-wget -O- https://github.com/vc-teahouse/Baseband-guard/raw/main/setup.sh | bash
+setup_baseband_guard
 
 echo "[*] Patching security/Kconfig for baseband_guard..."
 sed -i '/^config LSM$/,/^help$/{ /^[[:space:]]*default/ { /baseband_guard/! s/selinux/selinux,baseband_guard/ } }' security/Kconfig
+sed -i 's/depends on !CC_IS_CLANG$/depends on !CC_IS_CLANG || CLANG_VERSION >= 120001/' security/Kconfig
 echo "[+] Baseband-guard setup finished."
 echo "==========================================="
 
@@ -100,9 +156,12 @@ echo "==========================================="
 echo "==========================================="
 echo " [*] Initializing AnyKernel3 Workspace"
 echo "==========================================="
-rm -rf anykernel
-echo "[*] Cloning AnyKernel3..."
-git clone https://github.com/AstideLabs/AnyKernel3 -b kona --single-branch --depth=1 anykernel
+if [ -e anykernel ]; then
+    echo "[!] Refusing existing AnyKernel workspace"
+    exit 1
+fi
+echo "[*] Fetching pinned AnyKernel3..."
+clone_exact_commit "$ANYKERNEL_REPO" "$ANYKERNEL_COMMIT" anykernel
 echo "[+] AnyKernel3 cloned successfully."
 echo "[*] Adjusting AnyKernel3..."
 sed -i "s/^device\.name1=.*/device.name1=${DEVICE_NAME}/" anykernel/anykernel.sh
@@ -131,6 +190,8 @@ build_target() {
         HOSTCC="ccache clang"
         CROSS_COMPILE="${CROSS_COMPILE}"
         CROSS_COMPILE_ARM32="${CROSS_COMPILE_ARM32}"
+        KCFLAGS="-fdebug-prefix-map=${KERNEL_DIR}=/source -fdebug-prefix-map=${OUT_DIR}=/build"
+        KAFLAGS="-fdebug-prefix-map=${KERNEL_DIR}=/source -fdebug-prefix-map=${OUT_DIR}=/build"
     )
 
     echo "[*] Cleaning ${OUT_DIR}..."
@@ -202,7 +263,15 @@ build_target() {
     
     # 1. Baseband-guard configuration (Always applied)
     echo "[*] Injecting Baseband-guard configuration..."
-    scripts/config --file "${OUT_DIR}/.config" -e BBG
+    scripts/config --file "${OUT_DIR}/.config" \
+        -e BBG \
+        -e BPF_UNPRIV_DEFAULT_OFF \
+        -e FORTIFY_SOURCE \
+        -e HARDENED_USERCOPY \
+        -d LOCALVERSION_AUTO \
+        -e SECURITY_DMESG_RESTRICT \
+        -e SLAB_FREELIST_HARDENED \
+        -e SLAB_FREELIST_RANDOM
 
     # 2. KernelSU configurations
     if [ "$ENABLE_KSU" -eq 1 ]; then
@@ -263,6 +332,30 @@ build_target() {
     echo "[*] Updating config (make olddefconfig)..."
     make "${MAKE_OPTS[@]}" olddefconfig
 
+    local REQUIRED_CONFIG=(
+        CONFIG_BBG=y
+        CONFIG_BPF_UNPRIV_DEFAULT_OFF=y
+        CONFIG_FORTIFY_SOURCE=y
+        CONFIG_HARDENED_USERCOPY=y
+        CONFIG_SECURITY_DMESG_RESTRICT=y
+        CONFIG_SLAB_FREELIST_HARDENED=y
+        CONFIG_SLAB_FREELIST_RANDOM=y
+    )
+    if [ "$ENABLE_KSU" -eq 1 ]; then
+        REQUIRED_CONFIG+=(CONFIG_KSU=y CONFIG_KSU_SUSFS=y)
+    fi
+    local setting
+    for setting in "${REQUIRED_CONFIG[@]}"; do
+        grep -qx "$setting" "${OUT_DIR}/.config" || {
+            echo "[!] Required config missing: $setting"
+            exit 1
+        }
+    done
+    grep -qx '# CONFIG_LOCALVERSION_AUTO is not set' "${OUT_DIR}/.config" || {
+        echo "[!] CONFIG_LOCALVERSION_AUTO must be disabled"
+        exit 1
+    }
+
     # ----------------------------------------------------
     # Compilation
     # ----------------------------------------------------
@@ -300,11 +393,29 @@ build_target() {
         fi
         local GIT_COMMIT_ID=$(git rev-parse --short=8 HEAD 2>/dev/null || echo "unknown")
         local OS_UPPER=$(echo "$OS_TYPE" | tr '[:lower:]' '[:upper:]')
-        local ZIP_FILENAME="APTKernel_${OS_UPPER}_${DEVICE_NAME}_${KSU_ZIP_STR}_$(date +'%Y%m%d_%H%M%S')_anykernel3_${GIT_COMMIT_ID}.zip"
+        local ZIP_FILENAME="APTKernel_${OS_UPPER}_${DEVICE_NAME}_${KSU_ZIP_STR}_anykernel3_${GIT_COMMIT_ID}.zip"
+
+        {
+            printf 'upstream_kernel_commit=%s\n' "$UPSTREAM_KERNEL_COMMIT"
+            printf 'build_commit=%s\n' "$(git rev-parse HEAD)"
+            printf 'resukisu_commit=%s\n' "$RESUKISU_COMMIT"
+            printf 'baseband_guard_commit=%s\n' "$BASEBAND_GUARD_COMMIT"
+            printf 'anykernel_commit=%s\n' "$ANYKERNEL_COMMIT"
+            printf 'source_date_epoch=%s\n' "$SOURCE_DATE_EPOCH"
+            printf 'target_device=%s\n' "$DEVICE_NAME"
+            printf 'target_os=%s\n' "$OS_TYPE"
+            printf 'kernelsu=%s\n' "$ENABLE_KSU"
+        } > anykernel/BUILD-METADATA.txt
+        (
+            cd "anykernel/kernels/${OS_TYPE}"
+            sha256sum Image dtb dtbo.img > SHA256SUMS
+        )
+        find anykernel -path anykernel/.git -prune -o \
+            -exec touch -h --date="@${SOURCE_DATE_EPOCH}" {} +
         
         echo "[*] Zipping $ZIP_FILENAME ..."
         pushd anykernel > /dev/null
-        zip -r9 "$ZIP_FILENAME" ./* -x .git .gitignore out/ ./*.zip > /dev/null
+        zip -X -r9 "$ZIP_FILENAME" ./* -x '.git/*' .gitignore 'out/*' './*.zip' > /dev/null
         mv "$ZIP_FILENAME" ../
         popd > /dev/null
         

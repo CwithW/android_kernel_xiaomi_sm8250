@@ -1,0 +1,76 @@
+name: Build elish MIUI ReSukiSU
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-kernel:
+    name: elish | MIUI | ReSukiSU-SuSFS
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout pinned build revision
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 1
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            bc bison build-essential ccache curl flex gawk git gnupg gperf \
+            libncurses-dev libssl-dev libxml2 libxml2-utils liblz4-tool lzop \
+            python-is-python3 rsync schedtool squashfs-tools xsltproc zip zlib1g-dev
+          ccache -M 10G
+
+      - name: Install verified ZyC Clang 16.0.6
+        env:
+          TOOLCHAIN_URL: https://github.com/ZyCromerZ/Clang/releases/download/16.0.6-20260807-release/Clang-16.0.6-20260807.tar.gz
+          TOOLCHAIN_SHA256: c11341a58e15cebc4e25472291791ae6a5dceb3675c9dfde2cb035ad893b6ae0
+        run: |
+          mkdir -p "$HOME/zyc-clang"
+          curl --fail --location --retry 3 \
+            --output "$RUNNER_TEMP/zyc-clang.tar.gz" "$TOOLCHAIN_URL"
+          printf '%s  %s\n' "$TOOLCHAIN_SHA256" "$RUNNER_TEMP/zyc-clang.tar.gz" \
+            | sha256sum --check
+          tar -xzf "$RUNNER_TEMP/zyc-clang.tar.gz" -C "$HOME/zyc-clang"
+          "$HOME/zyc-clang/bin/clang" --version
+
+      - name: Build elish MIUI kernel with ReSukiSU
+        run: |
+          chmod +x build_kernel.sh
+          ./build_kernel.sh elish ksu miui
+
+      - name: Verify flash package
+        run: |
+          mapfile -t packages < <(find . -maxdepth 1 -type f \
+            -name 'APTKernel_MIUI_elish_ReSukiSU-SuSFS_*.zip' -print | sort)
+          test "${#packages[@]}" -eq 1
+          package="${packages[0]}"
+          unzip -l "$package"
+          unzip -Z1 "$package" | grep -qx 'BUILD-METADATA.txt'
+          unzip -Z1 "$package" | grep -qx 'kernels/miui/Image'
+          unzip -Z1 "$package" | grep -qx 'kernels/miui/dtb'
+          unzip -Z1 "$package" | grep -qx 'kernels/miui/dtbo.img'
+          if unzip -Z1 "$package" | grep -q '\.ko$'; then
+            echo 'Unexpected kernel module payload in flash package' >&2
+            exit 1
+          fi
+          sha256sum "$package" > "${package}.sha256"
+
+      - name: Upload flashable package and build evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: APTKernel-elish-miui-resukisu-${{ github.run_id }}
+          path: |
+            APTKernel_MIUI_elish_ReSukiSU-SuSFS_*.zip
+            APTKernel_MIUI_elish_ReSukiSU-SuSFS_*.zip.sha256
+            out_miui/.config
+            out_miui/Module.symvers
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
