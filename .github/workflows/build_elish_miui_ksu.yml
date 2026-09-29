@@ -72,5 +72,6 @@ jobs:
             out_miui/.config
             out_miui/Module.symvers
           if-no-files-found: error
+          include-hidden-files: true
           compression-level: 0
           retention-days: 30
