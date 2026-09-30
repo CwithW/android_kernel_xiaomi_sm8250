@@ -439,6 +439,11 @@ static int __maybe_unused xhci_plat_suspend(struct device *dev)
 	if (!xhci)
 		return 0;
 
+	if (IS_ENABLED(CONFIG_ELISH_REBOOT_DIAGNOSTICS))
+		dev_info(dev, "elish diagnostic system suspend: runtime-suspended=%d hw-accessible=%d skip-resume=%d\n",
+			 pm_runtime_suspended(dev), !!HCD_HW_ACCESSIBLE(hcd),
+			 hcd_to_bus(hcd)->skip_resume);
+
 	/*
 	 * 'skip_resume' will be true for targets not supporting PM suspend if
 	 * runtimePM state is active. No need of xhci_plat PM ops in such case.
