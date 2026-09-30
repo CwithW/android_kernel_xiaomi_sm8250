@@ -949,6 +949,12 @@ static int msm_ssphy_qmp_notify_disconnect(struct usb_phy *uphy,
 	struct msm_ssphy_qmp *phy = container_of(uphy, struct msm_ssphy_qmp,
 					phy);
 
+	if (IS_ENABLED(CONFIG_ELISH_REBOOT_DIAGNOSTICS))
+		dev_info(uphy->dev,
+			 "disconnect: clocks=%d power=%d suspended=%d cable=%d\n",
+			 phy->clk_enabled, phy->power_enabled,
+			 phy->in_suspend, phy->cable_connected);
+
 	/* USB2 disconnects can arrive after the SuperSpeed PHY is suspended. */
 	if (phy->clk_enabled && phy->power_enabled) {
 		writel_relaxed(0x00,
@@ -956,6 +962,8 @@ static int msm_ssphy_qmp_notify_disconnect(struct usb_phy *uphy,
 		readl_relaxed(phy->base +
 			phy->phy_reg[USB3_PHY_POWER_DOWN_CONTROL]);
 	}
+	if (IS_ENABLED(CONFIG_ELISH_REBOOT_DIAGNOSTICS))
+		dev_info(uphy->dev, "disconnect: register handling completed\n");
 
 	dev_dbg(uphy->dev, "QMP phy disconnect notification\n");
 	dev_dbg(uphy->dev, " cable_connected=%d\n", phy->cable_connected);

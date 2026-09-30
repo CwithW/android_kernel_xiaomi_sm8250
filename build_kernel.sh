@@ -377,6 +377,7 @@ build_target() {
             -e DPM_WATCHDOG \
             --set-val DPM_WATCHDOG_TIMEOUT 20 \
             -e DEBUG_INFO \
+            -e DEBUG_FS \
             -e KALLSYMS \
             -e KALLSYMS_ALL \
             --set-val PANIC_TIMEOUT 10
@@ -411,6 +412,7 @@ build_target() {
             CONFIG_DPM_WATCHDOG=y
             CONFIG_DPM_WATCHDOG_TIMEOUT=20
             CONFIG_DEBUG_INFO=y
+            CONFIG_DEBUG_FS=y
             CONFIG_KALLSYMS_ALL=y
             CONFIG_PANIC_TIMEOUT=10
         )

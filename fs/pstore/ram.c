@@ -850,6 +850,13 @@ static int ramoops_probe(struct platform_device *pdev)
 		}
 	}
 
+	if (IS_ENABLED(CONFIG_ELISH_REBOOT_DIAGNOSTICS))
+		pr_info("retained bytes: console=%zu pmsg=%zu dump0=%zu\n",
+			cxt->cprz ? persistent_ram_old_size(cxt->cprz) : 0,
+			cxt->mprz ? persistent_ram_old_size(cxt->mprz) : 0,
+			cxt->max_dump_cnt ?
+			persistent_ram_old_size(cxt->dprzs[0]) : 0);
+
 	err = pstore_register(&cxt->pstore);
 	if (err) {
 		pr_err("registering with pstore failed\n");
