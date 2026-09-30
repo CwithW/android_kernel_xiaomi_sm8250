@@ -11,6 +11,9 @@ readonly BASEBAND_GUARD_REPO="https://github.com/vc-teahouse/Baseband-guard.git"
 readonly BASEBAND_GUARD_COMMIT="a54e0dc6cf0aff4dd87fec49644a02d2eb612905"
 readonly ANYKERNEL_REPO="https://github.com/AstideLabs/AnyKernel3.git"
 readonly ANYKERNEL_COMMIT="23c026f3a2801a1e01e227b175f8ab26cccf14dd"
+readonly TARGET_ANDROID_VERSION="13"
+readonly TARGET_SECURITY_PATCH="2023-09"
+readonly TARGET_MIUI_INCREMENTAL="V14.0.5.0.TKYCNXM"
 
 clone_exact_commit() {
     local repository="$1"
@@ -164,7 +167,27 @@ echo "[*] Fetching pinned AnyKernel3..."
 clone_exact_commit "$ANYKERNEL_REPO" "$ANYKERNEL_COMMIT" anykernel
 echo "[+] AnyKernel3 cloned successfully."
 echo "[*] Adjusting AnyKernel3..."
-sed -i "s/^device\.name1=.*/device.name1=${DEVICE_NAME}/" anykernel/anykernel.sh
+sed -i \
+    -e 's/^do\.devicecheck=.*/do.devicecheck=1/' \
+    -e "s/^device\.name1=.*/device.name1=${DEVICE_NAME}/" \
+    anykernel/anykernel.sh
+if [ "$TARGET_OS" = "miui" ]; then
+    sed -i \
+        -e "s/^supported\.versions=.*/supported.versions=${TARGET_ANDROID_VERSION}/" \
+        -e "s/^supported\.patchlevels=.*/supported.patchlevels=${TARGET_SECURITY_PATCH}/" \
+        -e "s/^supported\.vendorpatchlevels=.*/supported.vendorpatchlevels=${TARGET_SECURITY_PATCH}/" \
+        anykernel/anykernel.sh
+
+    target_check_file="$(mktemp)"
+    printf '%s\n' \
+        'userincremental="$(file_getprop /system/build.prop "ro.build.version.incremental")";' \
+        "[ \"\$userincremental\" = \"${TARGET_MIUI_INCREMENTAL}\" ] || abort \"Unsupported MIUI build: \$userincremental (expected ${TARGET_MIUI_INCREMENTAL}). Aborting...\";" \
+        > "$target_check_file"
+    sed -i "/^userflavor=/r $target_check_file" anykernel/anykernel.sh
+    rm -f "$target_check_file"
+fi
+grep -qx 'do.devicecheck=1' anykernel/anykernel.sh
+grep -qx "device.name1=${DEVICE_NAME}" anykernel/anykernel.sh
 echo "[*] AnyKernel3 adjusted successfully."
 echo "==========================================="
 
@@ -404,6 +427,9 @@ build_target() {
             printf 'source_date_epoch=%s\n' "$SOURCE_DATE_EPOCH"
             printf 'target_device=%s\n' "$DEVICE_NAME"
             printf 'target_os=%s\n' "$OS_TYPE"
+            printf 'target_android_version=%s\n' "$TARGET_ANDROID_VERSION"
+            printf 'target_security_patch=%s\n' "$TARGET_SECURITY_PATCH"
+            printf 'target_miui_incremental=%s\n' "$TARGET_MIUI_INCREMENTAL"
             printf 'kernelsu=%s\n' "$ENABLE_KSU"
         } > anykernel/BUILD-METADATA.txt
         (
