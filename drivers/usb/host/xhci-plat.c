@@ -435,7 +435,6 @@ static int __maybe_unused xhci_plat_suspend(struct device *dev)
 {
 	struct usb_hcd  *hcd = dev_get_drvdata(dev);
 	struct xhci_hcd *xhci = hcd_to_xhci(hcd);
-	int ret;
 
 	if (!xhci)
 		return 0;
@@ -454,12 +453,9 @@ static int __maybe_unused xhci_plat_suspend(struct device *dev)
 		return 0;
 	}
 
-	/* Restore parent clocks, including when system suspend later aborts. */
-	if (pm_runtime_suspended(dev)) {
-		ret = pm_runtime_resume(dev);
-		if (ret < 0)
-			return ret;
-	}
+	/* Runtime suspend may have gated the clocks needed for port accesses. */
+	if (pm_runtime_suspended(dev))
+		return 0;
 
 	dev_dbg(dev, "xhci-plat PM suspend\n");
 
@@ -480,6 +476,12 @@ static int __maybe_unused xhci_plat_resume(struct device *dev)
 	if (hcd_to_bus(hcd)->skip_resume) {
 		dev_dbg(dev, "xhci-plat skip PM resume\n");
 		return 0;
+	}
+
+	/* Suspend rollback may run before the parent has restored its clocks. */
+	if (pm_runtime_suspended(dev)) {
+		ret = pm_runtime_resume(dev);
+		return ret < 0 ? ret : 0;
 	}
 
 	dev_dbg(dev, "xhci-plat PM resume\n");
