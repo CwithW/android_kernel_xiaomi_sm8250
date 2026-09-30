@@ -17,6 +17,7 @@
 #include <linux/sched.h>
 #include <linux/interrupt.h>
 #include <linux/irq.h>
+#include <linux/kmsg_dump.h>
 #include <linux/percpu.h>
 #include <linux/of.h>
 #include <linux/cpu.h>
@@ -763,6 +764,10 @@ static irqreturn_t wdog_bark_handler(int irq, void *dev_id)
 	show_state_filter(TASK_UNINTERRUPTIBLE);
 	if (wdog_dd->do_ipi_ping)
 		dump_cpu_alive_mask(wdog_dd);
+
+	/* The bite path resets hardware without running panic notifiers. */
+	if (IS_ENABLED(CONFIG_ELISH_REBOOT_DIAGNOSTICS))
+		kmsg_dump(KMSG_DUMP_PANIC);
 
 	msm_trigger_wdog_bite();
 	return IRQ_HANDLED;

@@ -162,3 +162,12 @@ config PSTORE_LAST_KMSG
 	help
 	  When the option is enabled, pstore will export a proc filesystem
 	  interface /proc/last_kmsg.
+
+config ELISH_REBOOT_DIAGNOSTICS
+	bool "Elish persistent reboot diagnostics"
+	depends on PSTORE_RAM=y && MACH_XIAOMI_ELISH
+	default n
+	help
+	  Reserve part of Xiaomi's ramoops area for Oops and panic records,
+	  and save watchdog bark diagnostics before the hardware reset.
+	  This is for temporary reboot diagnosis, not a production default.

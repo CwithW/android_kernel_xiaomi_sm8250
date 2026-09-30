@@ -993,6 +993,12 @@ static int __init ramoops_memreserve(char *p)
 	ramoops_data.console_size = size / 2;
 	ramoops_data.pmsg_size = size / 2;
 	ramoops_data.dump_oops = 1;
+	if (IS_ENABLED(CONFIG_ELISH_REBOOT_DIAGNOSTICS) &&
+	    size >= 4 * MIN_MEM_SIZE) {
+		/* Keep the console half; use the other half for pmsg and dumps. */
+		ramoops_data.record_size = size / 4;
+		ramoops_data.pmsg_size = size / 4;
+	}
 
 	pr_info("msm_reserve_ramoops_memory addr=%llx,size=%lx\n",
 		ramoops_data.mem_address, ramoops_data.mem_size);

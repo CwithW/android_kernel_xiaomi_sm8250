@@ -2,6 +2,12 @@ name: Build elish MIUI ReSukiSU
 
 on:
   workflow_dispatch:
+    inputs:
+      reboot_diagnostics:
+        description: Enable temporary persistent crash and suspend diagnostics
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -41,6 +47,8 @@ jobs:
           "$HOME/zyc-clang/bin/clang" --version
 
       - name: Build elish MIUI kernel with ReSukiSU
+        env:
+          ENABLE_REBOOT_DIAGNOSTICS: ${{ inputs.reboot_diagnostics && '1' || '0' }}
         run: |
           chmod +x build_kernel.sh
           ./build_kernel.sh elish ksu miui
@@ -73,6 +81,14 @@ jobs:
           fi
           sha256sum "$package" > "${package}.sha256"
 
+      - name: Preserve exact kernel debug symbols
+        if: inputs.reboot_diagnostics
+        run: |
+          tar -I 'gzip -1' -cf elish-reboot-debug-symbols.tar.gz \
+            -C out_miui vmlinux System.map .config
+          sha256sum elish-reboot-debug-symbols.tar.gz \
+            > elish-reboot-debug-symbols.tar.gz.sha256
+
       - name: Upload flashable package and build evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -82,6 +98,8 @@ jobs:
             APTKernel_MIUI_elish_ReSukiSU-SuSFS_*.zip.sha256
             out_miui/.config
             out_miui/Module.symvers
+            elish-reboot-debug-symbols.tar.gz
+            elish-reboot-debug-symbols.tar.gz.sha256
           if-no-files-found: error
           include-hidden-files: true
           compression-level: 0

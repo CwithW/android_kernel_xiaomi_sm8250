@@ -14,6 +14,7 @@ readonly ANYKERNEL_COMMIT="23c026f3a2801a1e01e227b175f8ab26cccf14dd"
 readonly TARGET_ANDROID_VERSION="13"
 readonly TARGET_SECURITY_PATCH="2023-09"
 readonly TARGET_MIUI_INCREMENTAL="V14.0.5.0.TKYCNXM"
+readonly ENABLE_REBOOT_DIAGNOSTICS="${ENABLE_REBOOT_DIAGNOSTICS:-0}"
 
 clone_exact_commit() {
     local repository="$1"
@@ -90,6 +91,17 @@ for arg in "$@"; do
         aosp) TARGET_OS="aosp" ;;
     esac
 done
+
+case "$ENABLE_REBOOT_DIAGNOSTICS" in
+    0) ;;
+    1)
+        if [ "$DEVICE_NAME" != elish ] || [ "$TARGET_OS" != miui ]; then
+            echo "[!] Reboot diagnostics are restricted to elish MIUI"
+            exit 1
+        fi
+        ;;
+    *) echo "[!] ENABLE_REBOOT_DIAGNOSTICS must be 0 or 1"; exit 1 ;;
+esac
 
 # ==========================================
 # Configuration & Environment
@@ -354,6 +366,22 @@ build_target() {
             -e REKERNEL_NETWORK
     fi
 
+    if [ "$ENABLE_REBOOT_DIAGNOSTICS" -eq 1 ]; then
+        scripts/config --file "${OUT_DIR}/.config" \
+            -e ELISH_REBOOT_DIAGNOSTICS \
+            -e PSTORE \
+            -e PSTORE_RAM \
+            -e PSTORE_CONSOLE \
+            -e PSTORE_PMSG \
+            -e PM_DEBUG \
+            -e DPM_WATCHDOG \
+            --set-val DPM_WATCHDOG_TIMEOUT 20 \
+            -e DEBUG_INFO \
+            -e KALLSYMS \
+            -e KALLSYMS_ALL \
+            --set-val PANIC_TIMEOUT 10
+    fi
+
     # We always need to re-evaluate dependencies because BBG is injected unconditionally
     echo "[*] Updating config (make olddefconfig)..."
     make "${MAKE_OPTS[@]}" olddefconfig
@@ -372,6 +400,20 @@ build_target() {
     )
     if [ "$ENABLE_KSU" -eq 1 ]; then
         REQUIRED_CONFIG+=(CONFIG_KSU=y CONFIG_KSU_SUSFS=y)
+    fi
+    if [ "$ENABLE_REBOOT_DIAGNOSTICS" -eq 1 ]; then
+        REQUIRED_CONFIG+=(
+            CONFIG_ELISH_REBOOT_DIAGNOSTICS=y
+            CONFIG_PSTORE_RAM=y
+            CONFIG_PSTORE_CONSOLE=y
+            CONFIG_PSTORE_PMSG=y
+            CONFIG_PM_DEBUG=y
+            CONFIG_DPM_WATCHDOG=y
+            CONFIG_DPM_WATCHDOG_TIMEOUT=20
+            CONFIG_DEBUG_INFO=y
+            CONFIG_KALLSYMS_ALL=y
+            CONFIG_PANIC_TIMEOUT=10
+        )
     fi
     local setting
     for setting in "${REQUIRED_CONFIG[@]}"; do
@@ -443,6 +485,7 @@ build_target() {
             printf 'target_miui_incremental=%s\n' "$TARGET_MIUI_INCREMENTAL"
             printf 'kernelsu=%s\n' "$ENABLE_KSU"
             printf 'external_kernel_modules=0\n'
+            printf 'reboot_diagnostics=%s\n' "$ENABLE_REBOOT_DIAGNOSTICS"
         } > anykernel/BUILD-METADATA.txt
         (
             cd "anykernel/kernels/${OS_TYPE}"
