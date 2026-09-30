@@ -448,6 +448,10 @@ static int __maybe_unused xhci_plat_suspend(struct device *dev)
 		return 0;
 	}
 
+	/* Runtime suspend may have gated the clocks needed for port accesses. */
+	if (pm_runtime_suspended(dev))
+		return 0;
+
 	dev_dbg(dev, "xhci-plat PM suspend\n");
 
 	/* Disable wakeup capability */
