@@ -13,6 +13,7 @@
 #include <linux/io.h>
 #include <linux/ipc_logging.h>
 #include <linux/kernel.h>
+#include <linux/kmsg_dump.h>
 #include <linux/list.h>
 #include <linux/of.h>
 #include <linux/of_irq.h>
@@ -118,6 +119,8 @@ static void write_tcs_reg_sync(struct rsc_drv *drv, int reg, int tcs_id,
 			       drv->name, raw_smp_processor_id(), reg, tcs_id,
 			       data, observed);
 			dump_stack();
+			kmsg_dump(KMSG_DUMP_OOPS);
+			panic("RPMh diagnostic: synchronized TCS write stalled");
 		}
 		udelay(1);
 	}
@@ -783,6 +786,8 @@ void rpmh_rsc_debug(struct rsc_drv *drv, struct completion *compl)
 			str);
 	else if (irq_sts)
 		pr_warn("ERROR:Possible lockup in Linux\n");
+	if (IS_ENABLED(CONFIG_ELISH_REBOOT_DIAGNOSTICS))
+		kmsg_dump(KMSG_DUMP_OOPS);
 
 	/*
 	 * The TCS(s) are busy waiting, we have no way to recover from this.
