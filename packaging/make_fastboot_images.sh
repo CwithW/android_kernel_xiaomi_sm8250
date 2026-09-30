@@ -3,33 +3,28 @@
 set -euo pipefail
 
 readonly EXPECTED_BOOT_SHA256="e6db633967576c553709e1411a5b085aef463437ee671ead1fb6f61ddb75c38a"
-readonly EXPECTED_VENDOR_BOOT_SHA256="03d3c0e7b4f7f38d29f6dd73d830ac44d012c5f88e42b1e751873fe91eadd54f"
-readonly EXPECTED_KERNEL_ZIP_SHA256="b7bb4aa80c315b49f67e50c89ed411205868ebb2ea5d9bcdeb3f5007da13c9df"
+readonly EXPECTED_KERNEL_ZIP_SHA256="dae10e6bb1effbb6ba442a3be7e1664dd42dfe8d76cce18703600f560ac26dae"
 readonly EXPECTED_MAGISKBOOT_SHA256="21be0ef297957c74184f0632dcf7d54777f064e64c8418c7d6ee107b9ddb3ffe"
+readonly EXPECTED_IMAGE_SHA256="64cc9db521d2e61e85149b72e60b8563dfe9da74821df0f374b94066177e9aea"
+readonly EXPECTED_OUTPUT_BOOT_SHA256="7f19b3c2cd4a2bda2ad83fc3f568eb31a5f5dc790da4ff9a0f1bf7c8039e8c58"
 
-readonly EXPECTED_IMAGE_SHA256="897904980b510fc12f28806854870f7a1819e271565d1cc8159a553cfe298445"
-readonly EXPECTED_DTB_SHA256="b7544e02005afd8bf64fbece61201f987ccd8179645822436c3b4bbda29d4a9f"
-readonly EXPECTED_DTBO_SHA256="5352e7d494195b1727369979ce4b18a8b49377853699c5d484fcf8cbabd889c0"
-
-readonly EXPECTED_OUTPUT_BOOT_SHA256="7d9fef07f30f36c1e2f8f4302417abf824b726938576be77363ea27d6e951cd2"
-readonly EXPECTED_OUTPUT_VENDOR_BOOT_SHA256="5ac1ee091069db50bd80f748c68802c16bf9634169042f2cabce9f3bd852d66a"
-readonly EXPECTED_OUTPUT_DTBO_SHA256="5352e7d494195b1727369979ce4b18a8b49377853699c5d484fcf8cbabd889c0"
-
+readonly EXPECTED_BUILD_COMMIT="61bd0b5e256485c8d42709bc93f5a450cf050923"
+readonly EXPECTED_UPSTREAM_COMMIT="33d88af6404817e4df2343582bf6c1dd8ee10b89"
+readonly GITHUB_ACTIONS_RUN="36678414768"
 readonly BOOT_PARTITION_SIZE=201326592
-readonly VENDOR_BOOT_PARTITION_SIZE=100663296
-readonly DTBO_PARTITION_SIZE=33554432
 
 usage() {
     cat <<'EOF'
 用法：
-  make_fastboot_images.sh <boot_b.img> <vendor_boot_b.img> <kernel.zip> <magiskboot> <output-dir>
+  make_fastboot_images.sh <boot_b.img> <kernel.zip> <magiskboot> <output-dir>
 
 输入必须精确对应：
   Xiaomi Pad 5 Pro (elish)
   MIUI V14.0.5.0.TKYCNXM / Android 13 / 2023-09
-  GitHub Actions run 36651140648 / commit 05fc5af1
+  GitHub Actions run 36678414768 / build commit 61bd0b5e
 
-脚本不会修改输入文件，不会覆盖既有输出目录，也不会清理审计工作目录。
+脚本只生成 boot_b 镜像。它不会读取、生成或修改 vendor_boot/DTB/DTBO，
+也不会修改输入文件、覆盖既有输出目录或清理审计工作目录。
 EOF
 }
 
@@ -64,7 +59,7 @@ require_size_at_most() {
     (( actual <= maximum )) || die "镜像超过分区容量：${file} 为 ${actual} 字节，分区上限 ${maximum} 字节"
 }
 
-[[ "$#" -eq 5 ]] || {
+[[ "$#" -eq 4 ]] || {
     usage >&2
     exit 2
 }
@@ -74,38 +69,41 @@ for command_name in awk cmp grep install mkdir mktemp realpath sha256sum stat st
 done
 
 readonly BOOT_IMAGE="$(realpath "$1")"
-readonly VENDOR_BOOT_IMAGE="$(realpath "$2")"
-readonly KERNEL_ZIP="$(realpath "$3")"
-readonly MAGISKBOOT="$(realpath "$4")"
-readonly OUTPUT_DIR="$(realpath -m "$5")"
+readonly KERNEL_ZIP="$(realpath "$2")"
+readonly MAGISKBOOT="$(realpath "$3")"
+readonly OUTPUT_DIR="$(realpath -m "$4")"
 
 [[ -f "${BOOT_IMAGE}" ]] || die "boot 镜像不存在：${BOOT_IMAGE}"
-[[ -f "${VENDOR_BOOT_IMAGE}" ]] || die "vendor_boot 镜像不存在：${VENDOR_BOOT_IMAGE}"
 [[ -f "${KERNEL_ZIP}" ]] || die "内核 ZIP 不存在：${KERNEL_ZIP}"
 [[ -x "${MAGISKBOOT}" ]] || die "magiskboot 不存在或不可执行：${MAGISKBOOT}"
 [[ ! -e "${OUTPUT_DIR}" ]] || die "输出路径已存在，拒绝覆盖：${OUTPUT_DIR}"
 
 require_sha256 "${BOOT_IMAGE}" "${EXPECTED_BOOT_SHA256}"
-require_sha256 "${VENDOR_BOOT_IMAGE}" "${EXPECTED_VENDOR_BOOT_SHA256}"
 require_sha256 "${KERNEL_ZIP}" "${EXPECTED_KERNEL_ZIP_SHA256}"
 require_sha256 "${MAGISKBOOT}" "${EXPECTED_MAGISKBOOT_SHA256}"
 
-readonly WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/elish-fastboot-images.XXXXXXXX")"
+readonly WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/elish-fastboot-boot.XXXXXXXX")"
 readonly BOOT_WORK="${WORK_DIR}/boot"
-readonly VENDOR_BOOT_WORK="${WORK_DIR}/vendor_boot"
 readonly STAGING_WORK="${WORK_DIR}/staging"
 readonly VERIFY_BOOT_WORK="${WORK_DIR}/verify_boot"
-readonly VERIFY_VENDOR_BOOT_WORK="${WORK_DIR}/verify_vendor_boot"
+readonly OUTPUT_BOOT_NAME="boot_b-resukisu-susfs-qmpfix.img"
 
-mkdir "${BOOT_WORK}" "${VENDOR_BOOT_WORK}" "${STAGING_WORK}" "${VERIFY_BOOT_WORK}" "${VERIFY_VENDOR_BOOT_WORK}"
+mkdir "${BOOT_WORK}" "${STAGING_WORK}" "${VERIFY_BOOT_WORK}"
 
 unzip -p "${KERNEL_ZIP}" "kernels/miui/Image" >"${STAGING_WORK}/Image"
-unzip -p "${KERNEL_ZIP}" "kernels/miui/dtb" >"${STAGING_WORK}/dtb"
-unzip -p "${KERNEL_ZIP}" "kernels/miui/dtbo.img" >"${STAGING_WORK}/dtbo.img"
+unzip -p "${KERNEL_ZIP}" "BUILD-METADATA.txt" >"${STAGING_WORK}/BUILD-METADATA.txt"
 
 require_sha256 "${STAGING_WORK}/Image" "${EXPECTED_IMAGE_SHA256}"
-require_sha256 "${STAGING_WORK}/dtb" "${EXPECTED_DTB_SHA256}"
-require_sha256 "${STAGING_WORK}/dtbo.img" "${EXPECTED_DTBO_SHA256}"
+grep -qx "build_commit=${EXPECTED_BUILD_COMMIT}" "${STAGING_WORK}/BUILD-METADATA.txt" \
+    || die "Actions 产物的 build commit 不匹配"
+grep -qx "upstream_kernel_commit=${EXPECTED_UPSTREAM_COMMIT}" "${STAGING_WORK}/BUILD-METADATA.txt" \
+    || die "Actions 产物的 upstream commit 不匹配"
+grep -qx 'target_device=elish' "${STAGING_WORK}/BUILD-METADATA.txt" \
+    || die "Actions 产物的目标设备不是 elish"
+grep -qx 'target_os=miui' "${STAGING_WORK}/BUILD-METADATA.txt" \
+    || die "Actions 产物不是 MIUI 构建"
+grep -qx 'kernelsu=1' "${STAGING_WORK}/BUILD-METADATA.txt" \
+    || die "Actions 产物没有启用 KernelSU"
 
 (
     cd "${BOOT_WORK}"
@@ -131,25 +129,15 @@ fi
 install -m 0644 "${STAGING_WORK}/Image" "${BOOT_WORK}/kernel"
 
 (
-    cd "${VENDOR_BOOT_WORK}"
-    "${MAGISKBOOT}" unpack "${VENDOR_BOOT_IMAGE}"
-)
-install -m 0644 "${STAGING_WORK}/dtb" "${VENDOR_BOOT_WORK}/dtb"
-
-(
     cd "${BOOT_WORK}"
-    "${MAGISKBOOT}" repack "${BOOT_IMAGE}" "${WORK_DIR}/boot_b-resukisu.img"
+    "${MAGISKBOOT}" repack "${BOOT_IMAGE}" "${WORK_DIR}/${OUTPUT_BOOT_NAME}"
 )
-(
-    cd "${VENDOR_BOOT_WORK}"
-    "${MAGISKBOOT}" repack "${VENDOR_BOOT_IMAGE}" "${WORK_DIR}/vendor_boot_b-resukisu.img"
-)
-install -m 0644 "${STAGING_WORK}/dtbo.img" "${WORK_DIR}/dtbo_b-resukisu.img"
 
 (
     cd "${VERIFY_BOOT_WORK}"
-    "${MAGISKBOOT}" unpack "${WORK_DIR}/boot_b-resukisu.img"
+    "${MAGISKBOOT}" unpack "${WORK_DIR}/${OUTPUT_BOOT_NAME}"
 )
+
 if "${MAGISKBOOT}" cpio "${VERIFY_BOOT_WORK}/ramdisk.cpio" test; then
     ramdisk_test=0
 else
@@ -158,35 +146,23 @@ fi
 [[ "${ramdisk_test}" -eq 0 ]] || die "输出 boot 仍被检测为 Magisk-patched（cpio test=${ramdisk_test}）"
 cmp "${VERIFY_BOOT_WORK}/kernel" "${STAGING_WORK}/Image"
 
-(
-    cd "${VERIFY_VENDOR_BOOT_WORK}"
-    "${MAGISKBOOT}" unpack "${WORK_DIR}/vendor_boot_b-resukisu.img"
-)
-cmp "${VERIFY_VENDOR_BOOT_WORK}/dtb" "${STAGING_WORK}/dtb"
-cmp "${VERIFY_VENDOR_BOOT_WORK}/ramdisk.cpio" "${VENDOR_BOOT_WORK}/ramdisk.cpio"
-cmp "${WORK_DIR}/dtbo_b-resukisu.img" "${STAGING_WORK}/dtbo.img"
-
 strings -a "${VERIFY_BOOT_WORK}/kernel" >"${WORK_DIR}/kernel.strings"
-grep -Fq "Linux version 4.19.325-cip135-st19-aptusitu-perf+" "${WORK_DIR}/kernel.strings" || die "输出内核版本不匹配"
+grep -Fq "Linux version 4.19.325-cip135-st19-aptusitu-perf+" "${WORK_DIR}/kernel.strings" \
+    || die "输出内核版本不匹配"
 grep -Fq "KernelSU:" "${WORK_DIR}/kernel.strings" || die "输出内核未检测到 KernelSU"
 grep -Fq "susfs_init" "${WORK_DIR}/kernel.strings" || die "输出内核未检测到 SUSFS"
 
-require_size_at_most "${WORK_DIR}/boot_b-resukisu.img" "${BOOT_PARTITION_SIZE}"
-require_size_at_most "${WORK_DIR}/vendor_boot_b-resukisu.img" "${VENDOR_BOOT_PARTITION_SIZE}"
-require_size_at_most "${WORK_DIR}/dtbo_b-resukisu.img" "${DTBO_PARTITION_SIZE}"
-
-require_sha256 "${WORK_DIR}/boot_b-resukisu.img" "${EXPECTED_OUTPUT_BOOT_SHA256}"
-require_sha256 "${WORK_DIR}/vendor_boot_b-resukisu.img" "${EXPECTED_OUTPUT_VENDOR_BOOT_SHA256}"
-require_sha256 "${WORK_DIR}/dtbo_b-resukisu.img" "${EXPECTED_OUTPUT_DTBO_SHA256}"
+require_size_at_most "${WORK_DIR}/${OUTPUT_BOOT_NAME}" "${BOOT_PARTITION_SIZE}"
+if [[ -n "${EXPECTED_OUTPUT_BOOT_SHA256}" ]]; then
+    require_sha256 "${WORK_DIR}/${OUTPUT_BOOT_NAME}" "${EXPECTED_OUTPUT_BOOT_SHA256}"
+fi
 
 mkdir "${OUTPUT_DIR}"
-install -m 0644 "${WORK_DIR}/boot_b-resukisu.img" "${OUTPUT_DIR}/boot_b-resukisu.img"
-install -m 0644 "${WORK_DIR}/vendor_boot_b-resukisu.img" "${OUTPUT_DIR}/vendor_boot_b-resukisu.img"
-install -m 0644 "${WORK_DIR}/dtbo_b-resukisu.img" "${OUTPUT_DIR}/dtbo_b-resukisu.img"
+install -m 0644 "${WORK_DIR}/${OUTPUT_BOOT_NAME}" "${OUTPUT_DIR}/${OUTPUT_BOOT_NAME}"
 
 (
     cd "${OUTPUT_DIR}"
-    sha256sum "boot_b-resukisu.img" "vendor_boot_b-resukisu.img" "dtbo_b-resukisu.img" >"SHA256SUMS"
+    sha256sum "${OUTPUT_BOOT_NAME}" >"SHA256SUMS"
 )
 
 cat >"${OUTPUT_DIR}/BUILD-METADATA.txt" <<EOF
@@ -197,20 +173,24 @@ android=13
 security_patch=2023-09-01
 slot=b
 kernel=4.19.325-cip135-st19-aptusitu-perf+
-kernel_repository=AstideLabs/android_kernel_xiaomi_sm8250
-kernel_commit=33d88af6404817e4df2343582bf6c1dd8ee10b89
-packaging_repository=CwithW/android_kernel_xiaomi_sm8250
-packaging_commit=05fc5af1e74e2350d821bfb5b9fc59c661ae62b7
-github_actions_run=36651140648
+kernel_repository=CwithW/android_kernel_xiaomi_sm8250
+upstream_kernel_commit=${EXPECTED_UPSTREAM_COMMIT}
+build_commit=${EXPECTED_BUILD_COMMIT}
+github_actions_run=${GITHUB_ACTIONS_RUN}
 root_solution=ReSukiSU-SuSFS
 magisk_ramdisk=restored-to-stock
+flash_partitions=boot_b
+vendor_boot=stock-unmodified
+dtb=stock-unmodified-inside-vendor_boot_b
+dtbo=stock-unmodified
 boot_template_sha256=${EXPECTED_BOOT_SHA256}
-vendor_boot_template_sha256=${EXPECTED_VENDOR_BOOT_SHA256}
 kernel_zip_sha256=${EXPECTED_KERNEL_ZIP_SHA256}
+kernel_image_sha256=${EXPECTED_IMAGE_SHA256}
 magiskboot_sha256=${EXPECTED_MAGISKBOOT_SHA256}
 audit_work_directory=${WORK_DIR}
 EOF
 
 printf '构建和校验完成：%s\n' "${OUTPUT_DIR}"
+printf '只允许刷写 boot_b；保持原厂 vendor_boot_b/DTB 和 dtbo_b。\n'
 printf 'Magisk 状态：已从 boot ramdisk 恢复为原厂状态；输出为 KernelSU-only。\n'
 printf '审计工作目录（未自动删除）：%s\n' "${WORK_DIR}"
