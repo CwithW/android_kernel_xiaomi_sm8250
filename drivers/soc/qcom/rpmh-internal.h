@@ -109,6 +109,9 @@ struct rsc_drv {
 	struct rpmh_ctrlr client;
 	int irq;
 	void *ipc_log_ctx;
+	int diagnostic_irq_cpu;
+	int diagnostic_irq_stage;
+	int diagnostic_irq_tcs;
 };
 
 extern bool rpmh_standalone;

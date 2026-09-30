@@ -8,6 +8,7 @@
 #include <linux/atomic.h>
 #include <linux/delay.h>
 #include <linux/interrupt.h>
+#include <linux/irqdesc.h>
 #include <linux/io.h>
 #include <linux/ipc_logging.h>
 #include <linux/kernel.h>
@@ -101,11 +102,22 @@ static void write_tcs_reg(struct rsc_drv *drv, int reg, int tcs_id, u32 data)
 static void write_tcs_reg_sync(struct rsc_drv *drv, int reg, int tcs_id,
 			       u32 data)
 {
+	u32 observed;
+	unsigned int retries = 0;
+
 	writel(data, drv->tcs_base + reg + RSC_DRV_TCS_OFFSET * tcs_id);
 	for (;;) {
-		if (data == readl(drv->tcs_base + reg +
-				  RSC_DRV_TCS_OFFSET * tcs_id))
+		observed = readl(drv->tcs_base + reg +
+				RSC_DRV_TCS_OFFSET * tcs_id);
+		if (data == observed)
 			break;
+		if (IS_ENABLED(CONFIG_ELISH_REBOOT_DIAGNOSTICS) &&
+		    ++retries == 100000) {
+			pr_err("RSC:%s stalled register sync: cpu=%u reg=%#x tcs=%d wanted=%#x observed=%#x\n",
+			       drv->name, raw_smp_processor_id(), reg, tcs_id,
+			       data, observed);
+			dump_stack();
+		}
 		udelay(1);
 	}
 }
@@ -255,6 +267,15 @@ static void enable_tcs_irq(struct rsc_drv *drv, int tcs_id, bool enable)
 	write_tcs_reg(drv, RSC_DRV_IRQ_ENABLE, 0, data);
 }
 
+static void rpmh_record_irq_stage(struct rsc_drv *drv, int stage, int tcs_id)
+{
+	if (IS_ENABLED(CONFIG_ELISH_REBOOT_DIAGNOSTICS)) {
+		WRITE_ONCE(drv->diagnostic_irq_cpu, raw_smp_processor_id());
+		WRITE_ONCE(drv->diagnostic_irq_tcs, tcs_id);
+		WRITE_ONCE(drv->diagnostic_irq_stage, stage);
+	}
+}
+
 /**
  * tcs_tx_done: TX Done interrupt handler
  */
@@ -266,7 +287,9 @@ static irqreturn_t tcs_tx_done(int irq, void *p)
 	const struct tcs_request *req;
 	struct tcs_cmd *cmd;
 
+	rpmh_record_irq_stage(drv, 1, -1);
 	irq_status = read_tcs_reg(drv, RSC_DRV_IRQ_STATUS, 0, 0);
+	rpmh_record_irq_stage(drv, 2, -1);
 
 	for_each_set_bit(i, &irq_status, BITS_PER_LONG) {
 		req = get_req_from_tcs(drv, i);
@@ -297,7 +320,9 @@ static irqreturn_t tcs_tx_done(int irq, void *p)
 		/* Clear AMC trigger & enable modes and
 		 * disable interrupt for this TCS
 		 */
+		rpmh_record_irq_stage(drv, 3, i);
 		__tcs_set_trigger(drv, i, false);
+		rpmh_record_irq_stage(drv, 4, i);
 skip:
 		/* Reclaim the TCS */
 		write_tcs_reg(drv, RSC_DRV_CMD_ENABLE, i, 0);
@@ -311,10 +336,13 @@ skip:
 		 */
 		if (!drv->tcs[ACTIVE_TCS].num_tcs)
 			enable_tcs_irq(drv, i, false);
+		rpmh_record_irq_stage(drv, 5, i);
 		if (req)
 			rpmh_tx_done(req, err);
+		rpmh_record_irq_stage(drv, 6, i);
 	}
 
+	rpmh_record_irq_stage(drv, 0, -1);
 	return IRQ_HANDLED;
 }
 
@@ -709,6 +737,22 @@ void rpmh_rsc_debug(struct rsc_drv *drv, struct completion *compl)
 	char str[20] = "";
 
 	pr_warn("RSC:%s\n", drv->name);
+	if (IS_ENABLED(CONFIG_ELISH_REBOOT_DIAGNOSTICS)) {
+		struct irq_desc *desc = irq_to_desc(drv->irq);
+		bool active = false, masked = false;
+
+		irq_get_irqchip_state(drv->irq, IRQCHIP_STATE_ACTIVE, &active);
+		irq_get_irqchip_state(drv->irq, IRQCHIP_STATE_MASKED, &masked);
+		pr_warn("IRQ diagnostic: irq=%d cpu=%d stage=%d tcs=%d active=%d masked=%d depth=%u internal-state=%#x disabled=%d in-progress=%d no-suspend-depth=%u\n",
+			drv->irq, READ_ONCE(drv->diagnostic_irq_cpu),
+			READ_ONCE(drv->diagnostic_irq_stage),
+			READ_ONCE(drv->diagnostic_irq_tcs), active, masked,
+			desc ? READ_ONCE(desc->depth) : 0,
+			desc ? READ_ONCE(desc->core_internal_state__do_not_mess_with_it) : 0,
+			rsc_irq_data ? irqd_irq_disabled(rsc_irq_data) : 0,
+			rsc_irq_data ? irqd_irq_inprogress(rsc_irq_data) : 0,
+			desc ? READ_ONCE(desc->no_suspend_depth) : 0);
+	}
 
 	for (i = 0; i < drv->num_tcs; i++) {
 		if (!test_bit(i, drv->tcs_in_use))
