@@ -62,6 +62,11 @@ jobs:
           unzip -p "$package" anykernel.sh | grep -qx 'supported.patchlevels=2023-09'
           unzip -p "$package" anykernel.sh | grep -qx 'supported.vendorpatchlevels=2023-09'
           unzip -p "$package" anykernel.sh | grep -Fq 'V14.0.5.0.TKYCNXM'
+          if grep -q '=m$' out_miui/.config; then
+            echo 'Unexpected modular driver in monolithic flash package' >&2
+            grep '=m$' out_miui/.config >&2
+            exit 1
+          fi
           if unzip -Z1 "$package" | grep -q '\.ko$'; then
             echo 'Unexpected kernel module payload in flash package' >&2
             exit 1

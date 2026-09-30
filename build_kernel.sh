@@ -292,9 +292,12 @@ build_target() {
         -e FORTIFY_SOURCE \
         -e HARDENED_USERCOPY \
         -d LOCALVERSION_AUTO \
+        -e RMNET_PERF \
+        -e RMNET_SHS \
         -e SECURITY_DMESG_RESTRICT \
         -e SLAB_FREELIST_HARDENED \
-        -e SLAB_FREELIST_RANDOM
+        -e SLAB_FREELIST_RANDOM \
+        -e USB_GSPCA
 
     # 2. KernelSU configurations
     if [ "$ENABLE_KSU" -eq 1 ]; then
@@ -360,9 +363,12 @@ build_target() {
         CONFIG_BPF_UNPRIV_DEFAULT_OFF=y
         CONFIG_FORTIFY_SOURCE=y
         CONFIG_HARDENED_USERCOPY=y
+        CONFIG_RMNET_PERF=y
+        CONFIG_RMNET_SHS=y
         CONFIG_SECURITY_DMESG_RESTRICT=y
         CONFIG_SLAB_FREELIST_HARDENED=y
         CONFIG_SLAB_FREELIST_RANDOM=y
+        CONFIG_USB_GSPCA=y
     )
     if [ "$ENABLE_KSU" -eq 1 ]; then
         REQUIRED_CONFIG+=(CONFIG_KSU=y CONFIG_KSU_SUSFS=y)
@@ -378,6 +384,11 @@ build_target() {
         echo "[!] CONFIG_LOCALVERSION_AUTO must be disabled"
         exit 1
     }
+    if grep -q '=m$' "${OUT_DIR}/.config"; then
+        echo "[!] Modular drivers are not allowed because the package ships no .ko files"
+        grep '=m$' "${OUT_DIR}/.config"
+        exit 1
+    fi
 
     # ----------------------------------------------------
     # Compilation
@@ -431,6 +442,7 @@ build_target() {
             printf 'target_security_patch=%s\n' "$TARGET_SECURITY_PATCH"
             printf 'target_miui_incremental=%s\n' "$TARGET_MIUI_INCREMENTAL"
             printf 'kernelsu=%s\n' "$ENABLE_KSU"
+            printf 'external_kernel_modules=0\n'
         } > anykernel/BUILD-METADATA.txt
         (
             cd "anykernel/kernels/${OS_TYPE}"
