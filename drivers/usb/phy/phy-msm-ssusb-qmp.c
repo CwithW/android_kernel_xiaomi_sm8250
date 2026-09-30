@@ -949,9 +949,13 @@ static int msm_ssphy_qmp_notify_disconnect(struct usb_phy *uphy,
 	struct msm_ssphy_qmp *phy = container_of(uphy, struct msm_ssphy_qmp,
 					phy);
 
-	writel_relaxed(0x00,
-		phy->base + phy->phy_reg[USB3_PHY_POWER_DOWN_CONTROL]);
-	readl_relaxed(phy->base + phy->phy_reg[USB3_PHY_POWER_DOWN_CONTROL]);
+	/* USB2 disconnects can arrive after the SuperSpeed PHY is suspended. */
+	if (phy->clk_enabled && phy->power_enabled) {
+		writel_relaxed(0x00,
+			phy->base + phy->phy_reg[USB3_PHY_POWER_DOWN_CONTROL]);
+		readl_relaxed(phy->base +
+			phy->phy_reg[USB3_PHY_POWER_DOWN_CONTROL]);
+	}
 
 	dev_dbg(uphy->dev, "QMP phy disconnect notification\n");
 	dev_dbg(uphy->dev, " cable_connected=%d\n", phy->cable_connected);
