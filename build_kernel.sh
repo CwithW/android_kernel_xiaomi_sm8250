@@ -15,6 +15,7 @@ readonly TARGET_ANDROID_VERSION="13"
 readonly TARGET_SECURITY_PATCH="2023-09"
 readonly TARGET_MIUI_INCREMENTAL="V14.0.5.0.TKYCNXM"
 readonly ENABLE_REBOOT_DIAGNOSTICS="${ENABLE_REBOOT_DIAGNOSTICS:-0}"
+readonly KHEADERS_ARCHIVE_RECIPE='tar --sort=name --format=gnu --mtime="@${SOURCE_DATE_EPOCH}" --owner=0 --group=0 --numeric-owner -Jcf "$tarfile" -C "$cpio_dir/" . > /dev/null'
 
 clone_exact_commit() {
     local repository="$1"
@@ -120,6 +121,14 @@ export KBUILD_BUILD_TIMESTAMP="$(date -u -d "@${SOURCE_DATE_EPOCH}" '+%a %b %d %
 export KBUILD_BUILD_USER="astide-repro"
 export KBUILD_BUILD_HOST="github-actions"
 export KBUILD_BUILD_VERSION=1
+
+# The embedded header archive otherwise captures checkout and rewrite times.
+grep -Fxq 'tar -Jcf $tarfile -C $cpio_dir/ . > /dev/null' kernel/gen_kheaders.sh || {
+    echo "[!] Unexpected kheaders generator recipe; review before building"
+    exit 1
+}
+sed -i "/^tar -Jcf /c\\${KHEADERS_ARCHIVE_RECIPE}" kernel/gen_kheaders.sh
+grep -Fxq "$KHEADERS_ARCHIVE_RECIPE" kernel/gen_kheaders.sh
 
 # ccache Setup
 export CCACHE_DIR="$HOME/.cache/ccache_mikernel"
